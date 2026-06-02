@@ -1,0 +1,70 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+model Developer {
+  id                 String             @id @default(cuid())
+  email              String             @unique
+  fullName           String?
+  companyName        String?
+  companyNumber      String?
+  website            String?
+  jurisdiction       String?
+  status             DeveloperStatus    @default(pending)
+  apiKey             String             @unique
+  verificationTier   Int                @default(1)
+  verificationMethod VerificationMethod @default(email)
+  verifiedName       String?
+  createdAt          DateTime           @default(now())
+  updatedAt          DateTime           @updatedAt
+
+  agents Agent[]
+}
+
+model Agent {
+  id           String      @id @default(cuid())
+  name         String
+  description  String?
+  did          String      @unique
+  publicKey    String
+  capabilities String[]
+  status       AgentStatus @default(unverified)
+  developerId  String
+  createdAt    DateTime    @default(now())
+  updatedAt    DateTime    @updatedAt
+
+  developer Developer @relation(fields: [developerId], references: [id])
+}
+
+model AuditLog {
+  id           String   @id @default(cuid())
+  agentDid     String?
+  action       String
+  metadata     Json     @default("{}")
+  previousHash String
+  recordHash   String
+  signature    String
+  timestamp    DateTime @default(now())
+}
+
+enum DeveloperStatus {
+  pending
+  verified
+  active
+}
+
+enum AgentStatus {
+  unverified
+  active
+  revoked
+}
+
+enum VerificationMethod {
+  email
+  individual
+  company
+}
