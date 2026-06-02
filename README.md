@@ -16,19 +16,6 @@ Any service receiving a request from an Agentis-registered agent can call the pu
 
 ---
 
-## How it connects to proveyouragent
-
-Agentis handles identity registration and verification. [proveyouragent](https://github.com/lujainkhalil/proveyouragent) handles request-level signing.
-
-The flow:
-
-1. Developer registers on Agentis and creates an agent
-2. Agentis returns a DID and a private key — the private key is returned once and never stored
-3. The agent uses proveyouragent to sign every HTTP request with that private key via DPoP
-4. Any service receiving the request calls `GET /api/agents/[did]` to get the public key and verify the signature
-
----
-
 ## API
 
 ### POST /api/verify-company
@@ -258,6 +245,17 @@ Add all four environment variables in the Vercel dashboard under Project Setting
 
 ## Part of the Agentis ecosystem
 
-**Agentis** (this repo) — identity registration, DID issuance, public verification, verifiable audit
+**Agentis** (this repo) identity registration, DID issuance, public verification, verifiable audit
 
-**[proveyouragent](https://github.com/lujainkhalil/proveyouragent)** — request-level signing with DPoP, delegation chains, per-token revocation
+## How it connects to proveyouragent
+
+Agentis handles identity registration and verification. [proveyouragent](https://github.com/lujainkhalil/proveyouragent) handles request-level signing.
+
+The flow:
+
+1. Developer registers on Agentis and creates an agent
+2. Agentis returns a DID and a private key — the private key is returned once and never stored
+3. The agent uses proveyouragent to sign every HTTP request with that private key via DPoP
+4. Any service receiving the request calls `GET /api/agents/[did]` to get the public key and verify the signature
+
+**[proveyouragent](https://github.com/lujainkhalil/proveyouragent)** request-level signing with DPoP, delegation chains, per-token revocation
