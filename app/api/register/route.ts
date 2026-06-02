@@ -2,6 +2,8 @@ import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { writeAuditLog } from "@/lib/audit";
 import { generateApiKey } from "@/lib/apiKey";
+import { createVerificationToken } from "@/lib/token";
+import { sendVerificationEmail, sendOperatorNotification } from "@/lib/email";
 
 const CH_BASE = "https://api.company-information.service.gov.uk";
 const TIMEOUT_MS = 8000;
@@ -35,15 +37,11 @@ async function verifyCompanyInternal(
     };
   } catch {
     clearTimeout(timer);
-    return null; // timeout or network error → pending
+    return null;
   }
 }
 
 function emailDomainMatches(email: string, companyName: string): boolean {
-  // Heuristic: extract the domain from the email and check if any word from
-  // the company name appears in it. This is intentionally permissive —
-  // Companies House doesn't expose email domains, so exact matching is
-  // impossible. For MVP, auto-verify only when we get a clear match.
   const domain = email.split("@")[1]?.toLowerCase() ?? "";
   const words = companyName
     .toLowerCase()
@@ -51,6 +49,13 @@ function emailDomainMatches(email: string, companyName: string): boolean {
     .split(" ")
     .filter((w) => w.length > 3);
   return words.some((w) => domain.includes(w));
+}
+
+function buildVerificationUrl(token: string): string {
+  const base =
+    process.env.NEXT_PUBLIC_BASE_URL?.replace(/\/$/, "") ??
+    "https://agentis.dev";
+  return `${base}/api/verify-email?token=${token}`;
 }
 
 export async function POST(req: NextRequest) {
@@ -89,7 +94,7 @@ export async function POST(req: NextRequest) {
 
   const apiKey = generateApiKey();
 
-  // ── Company flow ────────────────────────────────────────────────────────────
+  // ── Company flow ─────────────────────────────────────────────────────────────
   if (companyNumber) {
     if (!companyName) {
       return NextResponse.json(
@@ -101,22 +106,19 @@ export async function POST(req: NextRequest) {
     const normalised = companyNumber.trim().toUpperCase();
     const chResult = await verifyCompanyInternal(normalised);
 
-    let status: "verified" | "pending" = "pending";
     let verifiedName: string | null = null;
     let resolvedJurisdiction: string | null = jurisdiction ?? null;
-    let verificationTier = 2; // pending fallback
+    let verificationTier = 2;
 
     if (chResult && chResult.status === "active") {
       verifiedName = chResult.name;
       resolvedJurisdiction = chResult.jurisdiction ?? jurisdiction ?? null;
-
       if (emailDomainMatches(email, chResult.name)) {
-        status = "verified";
         verificationTier = 3;
       }
-      // domain doesn't match → still pending but CH confirmed active
     }
 
+    // Always start as "pending" until email is verified
     const developer = await prisma.developer.create({
       data: {
         email,
@@ -124,13 +126,30 @@ export async function POST(req: NextRequest) {
         companyNumber: normalised,
         jurisdiction: resolvedJurisdiction,
         website: website ?? null,
-        status,
+        status: "pending",
         apiKey,
         verificationTier,
         verificationMethod: "company",
         verifiedName,
       },
     });
+
+    const token = await createVerificationToken(developer.id);
+    const verificationUrl = buildVerificationUrl(token);
+
+    // Fire both emails concurrently; don't fail registration if email bounces
+    await Promise.allSettled([
+      sendVerificationEmail({ to: email, verificationUrl }),
+      sendOperatorNotification({
+        email,
+        companyName,
+        companyNumber: normalised,
+        verificationMethod: "company",
+        verificationTier,
+        developerId: developer.id,
+        registeredAt: developer.createdAt.toISOString(),
+      }),
+    ]);
 
     await writeAuditLog({
       action: "DEVELOPER_REGISTERED",
@@ -139,29 +158,21 @@ export async function POST(req: NextRequest) {
         email,
         flow: "company",
         companyNumber: normalised,
-        status,
         verificationTier,
       },
     });
 
     return NextResponse.json(
       {
-        apiKey,
+        message:
+          "Check your email to verify your address before your API key is activated.",
         developerId: developer.id,
-        status,
-        verificationTier,
-        verificationMethod: "company",
-        verifiedName,
-        note:
-          status === "pending"
-            ? "Company verification pending. You can start building with your API key now."
-            : undefined,
       },
       { status: 201 }
     );
   }
 
-  // ── Individual flow ─────────────────────────────────────────────────────────
+  // ── Individual flow ───────────────────────────────────────────────────────────
   if (!fullName || typeof fullName !== "string") {
     return NextResponse.json(
       {
@@ -184,25 +195,36 @@ export async function POST(req: NextRequest) {
     },
   });
 
+  const token = await createVerificationToken(developer.id);
+  const verificationUrl = buildVerificationUrl(token);
+
+  await Promise.allSettled([
+    sendVerificationEmail({ to: email, verificationUrl }),
+    sendOperatorNotification({
+      email,
+      fullName,
+      verificationMethod: "individual",
+      verificationTier: 2,
+      developerId: developer.id,
+      registeredAt: developer.createdAt.toISOString(),
+    }),
+  ]);
+
   await writeAuditLog({
     action: "DEVELOPER_REGISTERED",
     metadata: {
       developerId: developer.id,
       email,
       flow: "individual",
-      status: "pending",
       verificationTier: 2,
     },
   });
 
   return NextResponse.json(
     {
-      apiKey,
+      message:
+        "Check your email to verify your address before your API key is activated.",
       developerId: developer.id,
-      status: "pending",
-      verificationTier: 2,
-      verificationMethod: "individual",
-      note: "Individual verification is pending manual review. Your API key is active — you can start building now.",
     },
     { status: 201 }
   );
