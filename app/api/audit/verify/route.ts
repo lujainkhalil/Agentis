@@ -27,19 +27,34 @@ export async function GET(req: NextRequest) {
 
   for (let i = 0; i < records.length; i++) {
     const r = records[i];
+    const meta = r.metadata as Record<string, unknown>;
 
-    // Re-compute the recordHash from the stored fields
-    const contentForHash = JSON.stringify({
-      agentDid: r.agentDid ?? null,
-      action: r.action,
-      metadata: r.metadata,
-      previousHash: r.previousHash,
-      timestamp: r.timestamp.toISOString(),
-    });
+    // Use the stored hash content string for genesis records
+    // For other records use __hashContent stored in metadata
+    let content: string;
 
-    const recomputed = hashContent(contentForHash);
+    if (r.action === "GENESIS") {
+      content = JSON.stringify({
+        agentDid: null,
+        action: "GENESIS",
+        metadata: { note: "Chain initialised" },
+        previousHash: GENESIS_HASH,
+      });
+    } else {
+      const hashContent_ = meta.__hashContent as string | undefined;
+      if (!hashContent_) {
+        return NextResponse.json({
+          valid: false,
+          brokenAt: i,
+          recordId: r.id,
+          reason: "Missing __hashContent — cannot verify record",
+        });
+      }
+      content = hashContent_;
+    }
 
-    // 1. Does the stored recordHash match our recomputation?
+    const recomputed = hashContent(content);
+
     if (recomputed !== r.recordHash) {
       return NextResponse.json({
         valid: false,
@@ -49,13 +64,12 @@ export async function GET(req: NextRequest) {
       });
     }
 
-    // 2. Does previousHash chain correctly?
     if (r.previousHash !== expectedPreviousHash) {
       return NextResponse.json({
         valid: false,
         brokenAt: i,
         recordId: r.id,
-        reason: "previousHash does not match preceding record's hash — chain is broken",
+        reason: "previousHash does not match preceding record",
       });
     }
 

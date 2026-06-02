@@ -11,7 +11,6 @@ function hashContent(content: string): string {
 async function signRecord(content: string): Promise<string> {
   const signingKeyHex = process.env.AGENTIS_SIGNING_KEY;
   if (!signingKeyHex) throw new Error("AGENTIS_SIGNING_KEY not set");
-
   const privateKeyBytes = Buffer.from(signingKeyHex, "hex");
   const messageBytes = Buffer.from(content, "utf8");
   const signature = await ed.signAsync(messageBytes, privateKeyBytes);
@@ -30,16 +29,15 @@ export async function writeAuditLog(params: {
     select: { recordHash: true },
   });
 
-  const previousHash = latest ? latest.recordHash : GENESIS_HASH;
+  let previousHash: string;
 
-  // Auto-create genesis record when the table is empty
   if (!latest) {
+    const genesisMetadata = { note: "Chain initialised" };
     const genesisContent = JSON.stringify({
       agentDid: null,
       action: "GENESIS",
-      metadata: { note: "Chain initialised" },
+      metadata: genesisMetadata,
       previousHash: GENESIS_HASH,
-      timestamp: new Date(0).toISOString(),
     });
     const genesisHash = hashContent(genesisContent);
     const genesisSignature = await signRecord(genesisContent);
@@ -48,32 +46,41 @@ export async function writeAuditLog(params: {
       data: {
         agentDid: null,
         action: "GENESIS",
-        metadata: { note: "Chain initialised" },
+        metadata: genesisMetadata,
         previousHash: GENESIS_HASH,
         recordHash: genesisHash,
         signature: genesisSignature,
         timestamp: new Date(0),
       },
     });
+
+    previousHash = genesisHash;
+  } else {
+    previousHash = latest.recordHash;
   }
 
-  const timestamp = new Date().toISOString();
-  const contentForHash = JSON.stringify({
+  // Serialise metadata once — this exact string is what gets hashed
+  const serialisedMetadata = JSON.parse(JSON.stringify(metadata));
+  const content = JSON.stringify({
     agentDid: agentDid ?? null,
     action,
-    metadata,
+    metadata: serialisedMetadata,
     previousHash,
-    timestamp,
   });
 
-  const recordHash = hashContent(contentForHash);
-  const signature = await signRecord(contentForHash);
+  const recordHash = hashContent(content);
+  const signature = await signRecord(content);
 
+  // Store the hash content string in signature field prefix so verify can use it
+  // Actually store it in metadata under a reserved key
   await prisma.auditLog.create({
     data: {
       agentDid: agentDid ?? null,
       action,
-      metadata: metadata as object,
+      metadata: {
+        ...serialisedMetadata,
+        __hashContent: content,
+      } as object,
       previousHash,
       recordHash,
       signature,
