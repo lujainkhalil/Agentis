@@ -17,11 +17,16 @@ async function signRecord(content: string): Promise<string> {
   return Buffer.from(signature).toString("hex");
 }
 
+export interface AuditReceipt {
+  recordHash: string;
+  timestamp: Date;
+}
+
 export async function writeAuditLog(params: {
   agentDid?: string;
   action: string;
   metadata?: Record<string, unknown>;
-}): Promise<void> {
+}): Promise<AuditReceipt> {
   const { agentDid, action, metadata = {} } = params;
 
   const latest = await prisma.auditLog.findFirst({
@@ -71,9 +76,9 @@ export async function writeAuditLog(params: {
   const recordHash = hashContent(content);
   const signature = await signRecord(content);
 
-  // Store the hash content string in signature field prefix so verify can use it
-  // Actually store it in metadata under a reserved key
-  await prisma.auditLog.create({
+  // __hashContent is stored so GET /api/audit/verify can recompute the hash
+  // without needing to reconstruct the exact serialisation order.
+  const record = await prisma.auditLog.create({
     data: {
       agentDid: agentDid ?? null,
       action,
@@ -85,5 +90,8 @@ export async function writeAuditLog(params: {
       recordHash,
       signature,
     },
+    select: { recordHash: true, timestamp: true },
   });
+
+  return { recordHash: record.recordHash, timestamp: record.timestamp };
 }
