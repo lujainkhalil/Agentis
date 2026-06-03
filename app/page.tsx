@@ -100,7 +100,7 @@ function Navbar() {
         </span>
         <div className="flex items-center gap-4">
           <a
-            href="https://github.com/lujainkhalil/agentis"
+            href="https://github.com/lujainkhalil/Agentis"
             target="_blank"
             rel="noopener noreferrer"
             className="text-sm font-medium text-white/70 transition hover:text-white"
@@ -148,7 +148,7 @@ function Hero() {
             Register for beta
           </a>
           <a
-            href="https://github.com/lujainkhalil/agentis"
+            href="https://github.com/lujainkhalil/Agentis"
             target="_blank"
             rel="noopener noreferrer"
             className="inline-flex items-center gap-2 rounded-md border border-white/20 px-6 py-3 text-sm font-semibold text-white/80 transition hover:border-white/40 hover:text-white"
@@ -454,7 +454,7 @@ function ProveYourAgentSection() {
         </p>
         <div className="flex flex-col items-center justify-center gap-3 sm:flex-row">
           <a
-            href="https://github.com/lujainkhalil/agentis"
+            href="https://github.com/lujainkhalil/Agentis"
             target="_blank"
             rel="noopener noreferrer"
             className="inline-flex items-center gap-2 rounded-md border border-[#e5e7eb] px-5 py-2.5 text-sm font-semibold text-[#374151] transition hover:border-[#111827] hover:text-[#111827]"
@@ -759,7 +759,7 @@ function Footer() {
           </div>
           <div className="flex items-center gap-5">
             <a
-              href="https://github.com/lujainkhalil/agentis"
+              href="https://github.com/lujainkhalil/Agentis"
               target="_blank"
               rel="noopener noreferrer"
               className="flex items-center gap-1.5 text-sm text-[#6b7280] transition hover:text-[#111827]"
