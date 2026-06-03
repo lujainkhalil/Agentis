@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { writeAuditLog } from "@/lib/audit";
+import { shapeCapabilities } from "@/lib/agentCard";
 
 // DIDs contain colons, which Next.js receives URL-encoded as %3A
 function decodeDid(raw: string): string {
@@ -33,19 +34,25 @@ export async function GET(
     return NextResponse.json({ error: "Agent not found" }, { status: 404 });
   }
 
-  // Fire-and-forget audit log — don't block the response
+  // Fire-and-forget audit log -- don't block the response
   writeAuditLog({
     agentDid: did,
     action: "AGENT_VERIFIED",
     metadata: { did },
   }).catch(console.error);
 
+  // Return structured capability objects when an Agent Card is present,
+  // plain strings when capabilities were registered manually.
+  const capabilities = shapeCapabilities(agent.capabilities, agent.agentCardData);
+
   const body = {
     did: agent.did,
     name: agent.name,
-    capabilities: agent.capabilities,
+    capabilities,
     status: agent.status,
     publicKey: agent.publicKey,
+    agentCardUrl: agent.agentCardUrl ?? null,
+    agentCardSigned: agent.agentCardSigned,
     verifiedName: agent.developer.verifiedName,
     verificationTier: agent.developer.verificationTier,
     verificationMethod: agent.developer.verificationMethod,

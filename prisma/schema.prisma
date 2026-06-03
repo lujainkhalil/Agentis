@@ -59,16 +59,19 @@ model VerificationToken {
 }
 
 model Agent {
-  id           String      @id @default(cuid())
-  name         String
-  description  String?
-  did          String      @unique
-  publicKey    String
-  capabilities String[]
-  status       AgentStatus @default(unverified)
-  developerId  String
-  createdAt    DateTime    @default(now())
-  updatedAt    DateTime    @updatedAt
+  id              String      @id @default(cuid())
+  name            String
+  description     String?
+  did             String      @unique
+  publicKey       String
+  capabilities    String[]    // canonical capability IDs, populated from card when present
+  agentCardUrl    String?     // URL to the A2A Agent Card (/.well-known/agent-card.json)
+  agentCardData   Json?       // full Agent Card JSON as fetched
+  agentCardSigned Boolean     @default(false) // true when card signature verified against publicKey
+  status          AgentStatus @default(unverified)
+  developerId     String
+  createdAt       DateTime    @default(now())
+  updatedAt       DateTime    @updatedAt
 
   developer Developer @relation(fields: [developerId], references: [id])
 }
