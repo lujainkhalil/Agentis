@@ -10,6 +10,7 @@ Every agent registered on Agentis:
 
 - Traces to a verified human or legal entity — there is always an accountable party behind it
 - Has a unique DID (Decentralised Identifier) and Ed25519 public key
+- Supports A2A Agent Cards for structured capability declarations
 - Has every action recorded in a cryptographically chained audit log that cannot be silently altered, including by Agentis itself
 
 Any service receiving a request from an Agentis-registered agent can call the public DID endpoint to verify its identity, capabilities, and who owns it — without any prior relationship.
@@ -36,13 +37,13 @@ Verifies a UK company against Companies House. Used internally by `/api/register
   "companyName": "Acme Ltd",
   "status": "active",
   "type": "ltd",
-  "registeredAddress": { ... },
+  "registeredAddress": { },
   "jurisdiction": "england-wales",
   "incorporatedOn": "2020-01-15"
 }
 ```
 
-Returns `202` with `pending: true` if Companies House times out — verification falls back to manual review.
+Returns `202` with `pending: true` if Companies House times out. Verification falls back to manual review.
 
 ---
 
@@ -56,12 +57,13 @@ Registers a developer or organisation. Supports two flows.
   "email": "founder@acme.com",
   "companyName": "Acme Ltd",
   "companyNumber": "12345678",
+  "domain": "acme.com",
   "jurisdiction": "england-wales",
   "website": "https://acme.com"
 }
 ```
 
-Auto-verifies to Tier 3 if Companies House confirms the company is active and the email domain matches the registered company name. Otherwise sets status to pending for manual review.
+Two gates must both complete before the API key is issued: email verification and DNS domain ownership (via TXT record). Auto-verifies to Tier 3 once both are confirmed.
 
 **Individual flow:**
 ```json
@@ -71,7 +73,7 @@ Auto-verifies to Tier 3 if Companies House confirms the company is active and th
 }
 ```
 
-Sets verificationTier to 2, status to pending manual review. API key is returned immediately so you can start building.
+Sets verificationTier to 2, status to pending manual review. Email verification required before the API key is issued.
 
 **Response (both flows):**
 ```json
@@ -101,9 +103,12 @@ Authorization: Bearer agentis_...
 {
   "name": "billing-agent",
   "description": "Handles invoice processing and payment reconciliation",
-  "capabilities": ["invoices:read", "payments:write"]
+  "capabilities": ["invoices:read", "payments:write"],
+  "agentCardUrl": "https://acme.com/.well-known/agent-card.json"
 }
 ```
+
+`agentCardUrl` is optional. When provided, Agentis fetches the A2A Agent Card and imports structured capabilities from it automatically.
 
 **Response:**
 ```json
@@ -112,11 +117,40 @@ Authorization: Bearer agentis_...
   "publicKey": "a7f3c2d1e8b4f920...",
   "privateKey": "3d9f1a2b...",
   "name": "billing-agent",
-  "capabilities": ["invoices:read", "payments:write"]
+  "capabilities": ["invoices:read", "payments:write"],
+  "agentCardUrl": "https://acme.com/.well-known/agent-card.json",
+  "agentCardSigned": false
 }
 ```
 
 The private key is returned once and never stored. There is no recovery path. Store it in a secrets manager immediately.
+
+---
+
+### POST /api/agents/[did]/refresh-card
+
+Re-fetches the agent card from `agentCardUrl` and updates stored capabilities. If the card contains a signature matching the agent's public key, `agentCardSigned` is set to `true`. Authenticated via API key.
+
+Use this after registering to sign your card and verify it:
+
+```python
+import json
+from proveyouragent.keypair import load_private_key
+
+def sign_card(card: dict, private_key_hex: str) -> dict:
+    def sort_keys(obj):
+        if isinstance(obj, dict):
+            return {k: sort_keys(v) for k, v in sorted(obj.items())}
+        if isinstance(obj, list):
+            return [sort_keys(i) for i in obj]
+        return obj
+
+    card_without_sig = {k: v for k, v in card.items() if k != "signature"}
+    canonical = json.dumps(sort_keys(card_without_sig), separators=(',', ':'))
+    private_key = load_private_key(bytes.fromhex(private_key_hex))
+    sig = private_key.sign(canonical.encode())
+    return {**card, "signature": sig.hex()}
+```
 
 ---
 
@@ -129,22 +163,59 @@ Public endpoint. No authentication required. Returns full agent identity for ver
 {
   "did": "did:web:agentis.dev:agents:a7f3c2d1e8b4f920",
   "name": "billing-agent",
-  "capabilities": ["invoices:read", "payments:write"],
+  "capabilities": [
+    {
+      "id": "invoices:read",
+      "description": "Read and list invoices"
+    },
+    {
+      "id": "payments:write",
+      "description": "Process payments"
+    }
+  ],
   "status": "active",
   "publicKey": "a7f3c2d1e8b4f920...",
   "verifiedName": "Acme Ltd",
   "verificationTier": 3,
   "verificationMethod": "company",
   "companyNumber": "12345678",
+  "verifiedDomain": "acme.com",
   "jurisdiction": "england-wales",
+  "agentCardUrl": "https://acme.com/.well-known/agent-card.json",
+  "agentCardSigned": true,
   "createdAt": "2026-06-01T10:00:00Z"
 }
 ```
 
+Capabilities are returned as structured objects when imported from an A2A Agent Card, and as plain strings when declared directly.
+
 The `verificationMethod` field tells any counterparty exactly what kind of trust they are getting:
+
 - `email` — email verified only, Tier 1
 - `individual` — real person verified, Tier 2
-- `company` — registered legal entity verified, Tier 3
+- `company` — registered legal entity verified via Companies House and domain ownership, Tier 3
+
+---
+
+### POST /api/audit/events
+
+Appends a custom event to the agent's audit chain. Authenticated via API key.
+
+```json
+{
+  "agentDid": "did:web:agentis.dev:agents:abc123",
+  "action": "INVOICE_PROCESSED",
+  "metadata": {
+    "invoiceId": "inv_456",
+    "amount": 1200,
+    "authorisedBy": "alice@acme.com"
+  }
+}
+```
+
+Action must be uppercase with underscores. The `AGENTIS_` prefix is reserved for platform events.
+
+Returns the `recordHash` so you can reference this specific record.
 
 ---
 
@@ -164,11 +235,11 @@ Verifies the integrity of the entire audit chain. Returns pass/fail and the firs
 
 ## Verification tiers
 
-| Tier | Method | Who | Agents status |
+| Tier | Method | Who | Agent status |
 |---|---|---|---|
 | 1 | Email only | Anyone | Unverified |
-| 2 | Individual ID | Solo developers | Individually verified |
-| 3 | Companies House | UK registered companies | Organisation verified |
+| 2 | Individual | Solo developers | Individually verified |
+| 3 | Companies House + domain | UK registered companies | Organisation verified |
 | 4 | Full KYB | Regulated industries | Compliance ready (coming soon) |
 
 ---
@@ -178,13 +249,24 @@ Verifies the integrity of the entire audit chain. Returns pass/fail and the firs
 Every action on the platform is recorded in a cryptographically chained audit log. This is not a regular log — it is a verifiable record.
 
 Each entry includes:
+
 - `previousHash` — SHA-256 hash of the previous record
 - `recordHash` — SHA-256 hash of this record's content
 - `signature` — the record signed by Agentis's Ed25519 private key
 
 The chain starts with a genesis record. Altering any record breaks every subsequent hash. An external auditor can verify the entire chain without trusting Agentis as the operator.
 
-This is the difference between an audit log and institutional-grade evidence.
+Developers can write their own events using `POST /api/audit/events` — making the audit chain a complete record of everything the agent did, not just platform activity.
+
+---
+
+## A2A Agent Card support
+
+Agentis supports A2A Agent Cards for structured capability declarations. When you register an agent with an `agentCardUrl`, Agentis fetches the card and imports structured capabilities automatically.
+
+After registration, sign your card with your agent's private key and call `POST /api/agents/[did]/refresh-card` to have Agentis verify the signature. Verified cards are marked `agentCardSigned: true` in all registry responses.
+
+The card format follows the A2A protocol specification. Capabilities are imported as structured objects with `id` and `description` fields.
 
 ---
 
@@ -195,12 +277,15 @@ This is the difference between an audit log and institutional-grade evidence.
 npm install
 ```
 
-**2. Set environment variables** — copy `.env.example` to `.env`:
+**2. Set environment variables — copy `.env.example` to `.env`:**
 ```
 DATABASE_URL=postgresql://...
 COMPANIES_HOUSE_API_KEY=...
 API_KEY_SECRET=...
 AGENTIS_SIGNING_KEY=<64-char hex Ed25519 private key>
+RESEND_API_KEY=...
+OPERATOR_EMAIL=...
+NEXT_PUBLIC_BASE_URL=https://your-deployment-url
 ```
 
 Generate a signing key:
@@ -228,7 +313,7 @@ npm install -g vercel
 vercel
 ```
 
-Add all four environment variables in the Vercel dashboard under Project Settings > Environment Variables. The `DATABASE_URL` should point to your Supabase connection string.
+Add all environment variables in the Vercel dashboard under Project Settings > Environment Variables. Use the Supabase connection pooler URL for `DATABASE_URL` with `?pgbouncer=true` appended.
 
 ---
 
@@ -243,26 +328,12 @@ Add all four environment variables in the Vercel dashboard under Project Setting
 
 ---
 
-## Part of the Agentis ecosystem
+## The Agentis ecosystem
 
-**Agentis** (this repo) identity registration, DID issuance, public verification, verifiable audit
+**Agentis** (this repo) — identity registration, DID issuance, A2A card support, public verification, verifiable audit
 
-## Quickstart
+**[proveyouragent](https://pypi.org/project/proveyouragent/)** — request-level signing with Ed25519 and DPoP, delegation chains, per-token revocation
 
-See [agentis-quickstart](https://github.com/lujainkhalil/agentis-quickstart) 
-for a complete working example showing agent registration, 
-signed requests, server-side verification, and audit trail 
-queries, end to end in under 10 minutes.
+**[agentis-verify](https://pypi.org/project/agentis-verify/)** — FastAPI middleware that verifies incoming agent requests against the Agentis registry
 
-## How it connects to proveyouragent
-
-Agentis handles identity registration and verification. [proveyouragent](https://github.com/lujainkhalil/proveyouragent) handles request-level signing.
-
-The flow:
-
-1. Developer registers on Agentis and creates an agent
-2. Agentis returns a DID and a private key — the private key is returned once and never stored
-3. The agent uses proveyouragent to sign every HTTP request with that private key via DPoP
-4. Any service receiving the request calls `GET /api/agents/[did]` to get the public key and verify the signature
-
-**[proveyouragent](https://github.com/lujainkhalil/proveyouragent)** request-level signing with DPoP, delegation chains, per-token revocation
+**[agentis-quickstart](https://github.com/lujainkhalil/agentis-quickstart)** — complete working example showing all components end to end in under 10 minutes
