@@ -513,6 +513,15 @@ function ProveYourAgentSection() {
             <PyPiIcon />
             View proveyouragent on PyPI
           </a>
+          <a
+            href="https://github.com/lujainkhalil/agentis-quickstart"
+            target="_blank"
+            rel="noopener noreferrer"
+            className="inline-flex items-center gap-2 rounded-md border border-[#e5e7eb] px-5 py-2.5 text-sm font-semibold text-[#374151] transition hover:border-[#111827] hover:text-[#111827]"
+          >
+            <GitHubIcon className="text-[#111827]" />
+            View quickstart on GitHub
+          </a>
         </div>
       </div>
     </section>
