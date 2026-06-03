@@ -247,6 +247,13 @@ Add all four environment variables in the Vercel dashboard under Project Setting
 
 **Agentis** (this repo) identity registration, DID issuance, public verification, verifiable audit
 
+## Quickstart
+
+See [agentis-quickstart](https://github.com/lujainkhalil/agentis-quickstart) 
+for a complete working example showing agent registration, 
+signed requests, server-side verification, and audit trail 
+queries, end to end in under 10 minutes.
+
 ## How it connects to proveyouragent
 
 Agentis handles identity registration and verification. [proveyouragent](https://github.com/lujainkhalil/proveyouragent) handles request-level signing.
