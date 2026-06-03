@@ -1,3 +1,4 @@
+import { randomBytes } from "crypto";
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { writeAuditLog } from "@/lib/audit";
@@ -7,6 +8,9 @@ import { sendVerificationEmail, sendOperatorNotification } from "@/lib/email";
 
 const CH_BASE = "https://api.company-information.service.gov.uk";
 const TIMEOUT_MS = 8000;
+const DOMAIN_TOKEN_TTL_DAYS = 7;
+
+// ── Helpers ───────────────────────────────────────────────────────────────────
 
 async function verifyCompanyInternal(
   companyNumber: string
@@ -41,22 +45,23 @@ async function verifyCompanyInternal(
   }
 }
 
-function emailDomainMatches(email: string, companyName: string): boolean {
-  const domain = email.split("@")[1]?.toLowerCase() ?? "";
-  const words = companyName
+function normaliseDomain(raw: string): string {
+  return raw
+    .trim()
     .toLowerCase()
-    .replace(/[^a-z0-9 ]/g, "")
-    .split(" ")
-    .filter((w) => w.length > 3);
-  return words.some((w) => domain.includes(w));
+    .replace(/^https?:\/\//, "") // strip accidental protocol
+    .replace(/\/.*$/, "")        // strip path
+    .replace(/^www\./, "");      // strip www
 }
 
-function buildVerificationUrl(token: string): string {
+function buildEmailVerificationUrl(token: string): string {
   const base =
     process.env.NEXT_PUBLIC_BASE_URL?.replace(/\/$/, "") ??
     "https://agentis.dev";
   return `${base}/api/verify-email?token=${token}`;
 }
+
+// ── Route ─────────────────────────────────────────────────────────────────────
 
 export async function POST(req: NextRequest) {
   let body: {
@@ -64,6 +69,7 @@ export async function POST(req: NextRequest) {
     fullName?: string;
     companyName?: string;
     companyNumber?: string;
+    domain?: string;
     jurisdiction?: string;
     website?: string;
   };
@@ -74,8 +80,15 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "Invalid JSON" }, { status: 400 });
   }
 
-  const { email, fullName, companyName, companyNumber, jurisdiction, website } =
-    body;
+  const {
+    email,
+    fullName,
+    companyName,
+    companyNumber,
+    domain,
+    jurisdiction,
+    website,
+  } = body;
 
   if (!email || typeof email !== "string" || !email.includes("@")) {
     return NextResponse.json(
@@ -102,50 +115,77 @@ export async function POST(req: NextRequest) {
         { status: 400 }
       );
     }
+    if (!domain || typeof domain !== "string") {
+      return NextResponse.json(
+        { error: "domain is required for the company flow (e.g. \"tesco.com\")" },
+        { status: 400 }
+      );
+    }
 
-    const normalised = companyNumber.trim().toUpperCase();
-    const chResult = await verifyCompanyInternal(normalised);
+    const normalisedCompanyNumber = companyNumber.trim().toUpperCase();
+    const normalisedDomain = normaliseDomain(domain);
+
+    if (!normalisedDomain.includes(".")) {
+      return NextResponse.json(
+        { error: "domain must be a valid domain name (e.g. \"tesco.com\")" },
+        { status: 400 }
+      );
+    }
+
+    const chResult = await verifyCompanyInternal(normalisedCompanyNumber);
 
     let verifiedName: string | null = null;
     let resolvedJurisdiction: string | null = jurisdiction ?? null;
-    let verificationTier = 2;
 
     if (chResult && chResult.status === "active") {
       verifiedName = chResult.name;
       resolvedJurisdiction = chResult.jurisdiction ?? jurisdiction ?? null;
-      if (emailDomainMatches(email, chResult.name)) {
-        verificationTier = 3;
-      }
     }
+    // If CH is unreachable (null) we still allow registration — status stays
+    // pending and the operator will see it. Domain verification happens async.
 
-    // Always start as "pending" until email is verified
     const developer = await prisma.developer.create({
       data: {
         email,
         companyName,
-        companyNumber: normalised,
+        companyNumber: normalisedCompanyNumber,
+        domain: normalisedDomain,
         jurisdiction: resolvedJurisdiction,
         website: website ?? null,
         status: "pending",
         apiKey,
-        verificationTier,
+        verificationTier: 2,       // promoted to 3 only when BOTH verifications pass
         verificationMethod: "company",
         verifiedName,
       },
     });
 
-    const token = await createVerificationToken(developer.id);
-    const verificationUrl = buildVerificationUrl(token);
+    // ── Domain verification record ──────────────────────────────────────────
+    const dnsToken = randomBytes(16).toString("hex");
+    const expiresAt = new Date(
+      Date.now() + DOMAIN_TOKEN_TTL_DAYS * 24 * 60 * 60 * 1000
+    );
+    await prisma.domainVerification.create({
+      data: {
+        developerId: developer.id,
+        domain: normalisedDomain,
+        token: dnsToken,
+        expiresAt,
+      },
+    });
 
-    // Fire both emails concurrently; don't fail registration if email bounces
+    // ── Email verification (sent silently — failure doesn't break registration)
+    const emailToken = await createVerificationToken(developer.id);
+    const emailVerificationUrl = buildEmailVerificationUrl(emailToken);
+
     await Promise.allSettled([
-      sendVerificationEmail({ to: email, verificationUrl }),
+      sendVerificationEmail({ to: email, verificationUrl: emailVerificationUrl }),
       sendOperatorNotification({
         email,
         companyName,
-        companyNumber: normalised,
+        companyNumber: normalisedCompanyNumber,
         verificationMethod: "company",
-        verificationTier,
+        verificationTier: 2,
         developerId: developer.id,
         registeredAt: developer.createdAt.toISOString(),
       }),
@@ -157,16 +197,25 @@ export async function POST(req: NextRequest) {
         developerId: developer.id,
         email,
         flow: "company",
-        companyNumber: normalised,
-        verificationTier,
+        companyNumber: normalisedCompanyNumber,
+        domain: normalisedDomain,
+        chConfirmed: chResult?.status === "active",
       },
     });
 
     return NextResponse.json(
       {
-        message:
-          "Check your email to verify your address before your API key is activated.",
         developerId: developer.id,
+        status: "domain_verification_pending",
+        domain: normalisedDomain,
+        txtRecord: {
+          host: `_agentis-verify.${normalisedDomain}`,
+          value: `agentis-verify=${dnsToken}`,
+          instructions:
+            "Add this TXT record to your domain DNS. Propagation can take up to 48 hours. " +
+            "Call POST /api/verify-domain once the record is live. " +
+            "A verification email has also been sent — both must be completed to activate your API key.",
+        },
       },
       { status: 201 }
     );
@@ -195,11 +244,11 @@ export async function POST(req: NextRequest) {
     },
   });
 
-  const token = await createVerificationToken(developer.id);
-  const verificationUrl = buildVerificationUrl(token);
+  const emailToken = await createVerificationToken(developer.id);
+  const emailVerificationUrl = buildEmailVerificationUrl(emailToken);
 
   await Promise.allSettled([
-    sendVerificationEmail({ to: email, verificationUrl }),
+    sendVerificationEmail({ to: email, verificationUrl: emailVerificationUrl }),
     sendOperatorNotification({
       email,
       fullName,

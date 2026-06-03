@@ -22,6 +22,7 @@ export async function GET(
           verificationTier: true,
           verificationMethod: true,
           companyNumber: true,
+          domain: true,
           jurisdiction: true,
         },
       },
@@ -51,6 +52,10 @@ export async function GET(
     companyNumber:
       agent.developer.verificationMethod === "company"
         ? agent.developer.companyNumber
+        : undefined,
+    verifiedDomain:
+      agent.developer.verificationMethod === "company"
+        ? agent.developer.domain
         : undefined,
     jurisdiction: agent.developer.jurisdiction,
     createdAt: agent.createdAt,

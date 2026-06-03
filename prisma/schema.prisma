@@ -13,6 +13,7 @@ model Developer {
   fullName           String?
   companyName        String?
   companyNumber      String?
+  domain             String?            // claimed domain for company flow
   website            String?
   jurisdiction       String?
   status             DeveloperStatus    @default(pending)
@@ -20,11 +21,28 @@ model Developer {
   verificationTier   Int                @default(1)
   verificationMethod VerificationMethod @default(email)
   verifiedName       String?
+  emailVerifiedAt    DateTime?          // set when email link is clicked
   createdAt          DateTime           @default(now())
   updatedAt          DateTime           @updatedAt
 
-  agents             Agent[]
-  verificationTokens VerificationToken[]
+  agents              Agent[]
+  verificationTokens  VerificationToken[]
+  domainVerifications DomainVerification[]
+}
+
+model DomainVerification {
+  id          String    @id @default(cuid())
+  developerId String
+  domain      String
+  token       String    @unique
+  verified    Boolean   @default(false)
+  verifiedAt  DateTime?
+  createdAt   DateTime  @default(now())
+  expiresAt   DateTime  // 7 days from creation
+
+  developer Developer @relation(fields: [developerId], references: [id])
+
+  @@index([developerId])
 }
 
 model VerificationToken {

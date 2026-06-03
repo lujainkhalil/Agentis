@@ -14,7 +14,16 @@ export async function GET(req: NextRequest) {
 
   const record = await prisma.verificationToken.findUnique({
     where: { token },
-    include: { developer: true },
+    include: {
+      developer: {
+        include: {
+          domainVerifications: {
+            where: { verified: true },
+            select: { id: true },
+          },
+        },
+      },
+    },
   });
 
   if (!record) {
@@ -28,7 +37,7 @@ export async function GET(req: NextRequest) {
     return NextResponse.json(
       {
         error:
-          "This verification link has already been used. If you need a new one, request a resend.",
+          "This verification link has already been used. If you need a new one, request a resend via POST /api/resend-verification.",
       },
       { status: 400 }
     );
@@ -44,15 +53,11 @@ export async function GET(req: NextRequest) {
     );
   }
 
-  // Determine the final tier:
-  // - Company flow that hit tier 3 stays at 3
-  // - Everything else resolves to tier 1 (email-only baseline)
-  //   Individual (tier 2) stays tier 2 — email verification unlocks the API
-  //   key but full individual verification is still manual review
   const developer = record.developer;
-  const finalTier = developer.verificationTier; // already set correctly at registration
+  const isCompanyFlow = developer.verificationMethod === "company";
+  const domainAlreadyVerified = developer.domainVerifications.length > 0;
 
-  // Mark token as used and upgrade developer status in one transaction
+  // Mark token used + record emailVerifiedAt in one transaction
   await prisma.$transaction([
     prisma.verificationToken.update({
       where: { id: record.id },
@@ -60,12 +65,7 @@ export async function GET(req: NextRequest) {
     }),
     prisma.developer.update({
       where: { id: developer.id },
-      data: {
-        status: "verified",
-        // Tier 1 is set for email-only registrations (verificationTier was
-        // left at 1 from the default). For individual/company flows the tier
-        // was already set higher at registration — we don't downgrade it here.
-      },
+      data: { emailVerifiedAt: new Date() },
     }),
   ]);
 
@@ -74,13 +74,56 @@ export async function GET(req: NextRequest) {
     metadata: {
       developerId: developer.id,
       email: developer.email,
-      verificationTier: finalTier,
+      verificationMethod: developer.verificationMethod,
+      domainAlreadyVerified,
     },
+  });
+
+  // ── Company flow: both gates required ──────────────────────────────────────
+  if (isCompanyFlow) {
+    if (!domainAlreadyVerified) {
+      // Email done, domain still outstanding — don't return API key yet
+      return NextResponse.json({
+        message:
+          "Email verified. Your domain verification is still pending. " +
+          "Once your DNS TXT record propagates, call POST /api/verify-domain to complete setup and receive your API key.",
+        emailVerified: true,
+        domainVerified: false,
+      });
+    }
+
+    // Both gates done — promote to tier 3 and hand over the key
+    await prisma.developer.update({
+      where: { id: developer.id },
+      data: { status: "verified", verificationTier: 3 },
+    });
+
+    await writeAuditLog({
+      action: "DEVELOPER_FULLY_VERIFIED",
+      metadata: {
+        developerId: developer.id,
+        email: developer.email,
+        verificationTier: 3,
+        trigger: "email_verified_after_domain",
+      },
+    });
+
+    return NextResponse.json({
+      apiKey: developer.apiKey,
+      message: "Email and domain both verified. Your API key is active.",
+      verificationTier: 3,
+    });
+  }
+
+  // ── Individual / email-only flow ──────────────────────────────────────────
+  await prisma.developer.update({
+    where: { id: developer.id },
+    data: { status: "verified" },
   });
 
   return NextResponse.json({
     apiKey: developer.apiKey,
     message: "Email verified. Your API key is active.",
-    verificationTier: finalTier,
+    verificationTier: developer.verificationTier,
   });
 }
