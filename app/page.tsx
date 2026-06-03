@@ -137,7 +137,7 @@ function Hero() {
         <p className="mx-auto mb-10 max-w-2xl text-lg leading-relaxed text-white/60">
           Organisations and developers register on Agentis and issue
           cryptographic identities to their agents. Any counterparty can verify
-          who owns an agent and whether to trust it — before interacting with
+          who owns an agent and whether to trust it, before interacting with
           it.
         </p>
         <div className="flex flex-col items-center justify-center gap-3 sm:flex-row">
@@ -226,7 +226,7 @@ const STEPS = [
   {
     n: "03",
     title: "Verify any agent, anywhere",
-    body: "Any counterparty calls GET /api/agents/[did] to verify an agent's identity, capabilities, and the organisation behind it — before interacting with it.",
+    body: "Any counterparty calls GET /api/agents/[did] to verify an agent's identity, capabilities, and the organisation behind it, before interacting with it.",
   },
 ];
 
@@ -249,6 +249,48 @@ function HowItWorksSection() {
                 {s.title}
               </h3>
               <p className="text-sm leading-relaxed text-[#6b7280]">{s.body}</p>
+            </div>
+          ))}
+        </div>
+      </div>
+    </section>
+  );
+}
+
+// ── Who uses Agentis ─────────────────────────────────────────────────────────
+
+const WHO_USES = [
+  {
+    role: "Building multi-agent systems",
+    body: "Your orchestrator calls sub-agent APIs. Those servers have no way to verify the request is legitimate or know which agent is calling. Agentis gives every agent a verified identity your servers can check.",
+  },
+  {
+    role: "Deploying third-party agents",
+    body: "You are running agents built by a developer you have never met. Your security team is asking questions. Call the public DID endpoint before deployment and see exactly who built the agent and what it is allowed to do.",
+  },
+  {
+    role: "Operating in a regulated environment",
+    body: "Your agents touch sensitive data and take consequential actions. When your compliance team or an auditor asks what happened, the Agentis audit chain gives you a tamper-evident record you can prove has not been altered.",
+  },
+];
+
+function WhoUsesSection() {
+  return (
+    <section className="bg-white px-6 py-20">
+      <div className="mx-auto max-w-6xl">
+        <h2 className="mb-12 text-center text-2xl font-bold text-[#111827] sm:text-3xl">
+          Who uses Agentis
+        </h2>
+        <div className="grid gap-6 sm:grid-cols-3">
+          {WHO_USES.map((w) => (
+            <div
+              key={w.role}
+              className="rounded-xl border border-[#e5e7eb] bg-white p-6 shadow-sm"
+            >
+              <p className="mb-3 text-xs font-semibold uppercase tracking-wider text-[#0F6E56]">
+                {w.role}
+              </p>
+              <p className="text-sm leading-relaxed text-[#6b7280]">{w.body}</p>
             </div>
           ))}
         </div>
@@ -441,7 +483,7 @@ function ProveYourAgentSection() {
     <section className="bg-white px-6 py-20">
       <div className="mx-auto max-w-3xl text-center">
         <div className="mb-4 inline-flex items-center gap-2 rounded-full border border-[#0F6E56]/20 bg-[#0F6E56]/5 px-3 py-1 text-xs font-medium text-[#0F6E56]">
-          Layer 5 — Request signing
+          Layer 5: Request signing
         </div>
         <h2 className="mb-4 text-2xl font-bold text-[#111827] sm:text-3xl">
           Built to work with proveyouragent
@@ -595,7 +637,7 @@ function CompanyForm() {
           </div>
           <div>
             <p className="text-sm font-semibold text-[#0F6E56]">
-              Registered — two steps remaining
+              Registered. Two steps remaining
             </p>
             <p className="mt-1 text-xs text-[#374151]">
               Verify your email (check your inbox) and add the DNS record below
@@ -826,6 +868,7 @@ export default function Page() {
       <Hero />
       <ProblemSection />
       <HowItWorksSection />
+      <WhoUsesSection />
       <CodeSection />
       <TiersSection />
       <ProveYourAgentSection />
